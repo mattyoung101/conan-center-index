@@ -9,6 +9,8 @@ import os
 
 required_conan_version = ">=2.0.9"
 
+# docker run --rm -v $(pwd):/usr/src/project -it conanio/gcc11-ubuntu16.04:2.2.2 bash
+
 
 class PackageConan(ConanFile):
     name = "or-tools"
@@ -41,7 +43,9 @@ class PackageConan(ConanFile):
     def requirements(self):
         self.requires("zlib/1.3.1")
         self.requires("bzip2/1.0.8")
-        self.requires("abseil/20250127.0")
+        # unresolvable version conflict on Abseil between re2 and protobuf, (20240116.1 vs 20240116.2)
+        # since it's just one minor version off, force this version
+        self.requires("abseil/20240116.1", force=True)
         self.requires("protobuf/[>=4.25.3]")
         self.requires("coin-utils/2.11.9")
         self.requires("coin-osi/0.108.7")
@@ -51,12 +55,14 @@ class PackageConan(ConanFile):
         self.requires("scip/9.2.3")
         self.requires("benchmark/1.9.4")
         self.requires("soplex/7.1.5")
+        self.requires("eigen/3.4.0")
+        self.requires("re2/20240301")
+
+    def build_requirements(self):
+        self.tool_requires("cmake/[>=3.20 <4]")
 
     def validate(self):
         check_min_cppstd(self, 14)
-
-    def build_requirements(self):
-        self.tool_requires("cmake/[>=3.16 <4]")
 
     def source(self):
         get(self, **self.conan_data["sources"][self.version], strip_root=True)
@@ -66,6 +72,8 @@ class PackageConan(ConanFile):
         tc = CMakeToolchain(self)
         tc.variables["BUILD_TESTING"] = "OFF"
         tc.variables["BUILD_SHARED_LIBS"] = "ON"
+        # CBC is not built for Conan yet
+        tc.variables["BUILD_Cbc"] = "TRUE"
         if is_msvc(self):
             tc.cache_variables["USE_MSVC_RUNTIME_LIBRARY_DLL"] = not is_msvc_static_runtime(self)
         tc.generate()
