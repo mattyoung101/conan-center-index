@@ -9,21 +9,16 @@ import os
 
 required_conan_version = ">=2.0.9"
 
-#
-# INFO: Please, remove all comments before pushing your PR!
-#
-
 
 class PackageConan(ConanFile):
     name = "or-tools"
-    description = "short description"
-    # Use short name only, conform to SPDX License List: https://spdx.org/licenses/
-    # In case not listed there, use "DocumentRef-<license-file-name>:LicenseRef-<package-name>"
-    license = ""
-    url = "https://github.com/conan-io/conan-center-index"
-    homepage = "https://github.com/project/package"
+    description = " Google's Operations Research tools"
+    license = "Apache-2.0"
+    url = "https://github.com/google/or-tools"
+    homepage = "https://developers.google.com/optimization"
     # no "conan" and project name in topics. Use topics from the upstream listed on GH
-    topics = ("topic1", "topic2", "topic3")
+    topics = ("optimization", "linear-programming", "operations-research",
+              "combinatorial-optimization", "or-tools")
     # package_type should usually be "library", "shared-library" or "static-library"
     package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
@@ -35,18 +30,10 @@ class PackageConan(ConanFile):
         "shared": False,
         "fPIC": True,
     }
-    # In case having config_options() or configure() method, the logic should be moved to the specific methods.
     implements = ["auto_shared_fpic"]
 
-    # no exports_sources attribute, but export_sources(self) method instead
     def export_sources(self):
         export_conandata_patches(self)
-
-    def configure(self):
-        # Keep this logic only in case configure() is needed e.g pure-c project.
-        # Otherwise remove configure() and auto_shared_fpic will manage it.
-        if self.options.shared:
-            self.options.rm_safe("fPIC")
 
     def layout(self):
         cmake_layout(self, src_folder="src")
@@ -63,29 +50,26 @@ class PackageConan(ConanFile):
         self.requires("highs/1.11.0")
         self.requires("scip/9.2.3")
         self.requires("benchmark/1.9.4")
+        self.requires("soplex/7.1.5")
 
     def validate(self):
-        # validate the minimum cpp standard supported. For C++ projects only.
         check_min_cppstd(self, 14)
 
-    # if a tool other than the compiler or CMake newer than 3.15 is required to build the project (pkgconf, bison, flex etc)
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.16 <4]")
 
     def source(self):
         get(self, **self.conan_data["sources"][self.version], strip_root=True)
-        # Using patches is always the last resort to fix issues. If possible, try to fix the issue in the upstream project.
         apply_conandata_patches(self)
 
     def generate(self):
-        # BUILD_SHARED_LIBS and POSITION_INDEPENDENT_CODE are set automatically as tc.variables when self.options.shared or self.options.fPIC exist
         tc = CMakeToolchain(self)
         tc.variables["BUILD_TESTING"] = "OFF"
+        tc.variables["BUILD_SHARED_LIBS"] = "ON"
         if is_msvc(self):
             tc.cache_variables["USE_MSVC_RUNTIME_LIBRARY_DLL"] = not is_msvc_static_runtime(self)
         tc.generate()
 
-        # In case there are dependencies listed under requirements, CMakeDeps should be used
         deps = CMakeDeps(self)
         deps.generate()
 
