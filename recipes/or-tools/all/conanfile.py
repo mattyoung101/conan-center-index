@@ -57,6 +57,7 @@ class PackageConan(ConanFile):
         self.requires("soplex/7.1.5")
         self.requires("eigen/3.4.0")
         self.requires("re2/20240301")
+        self.requires("coin-cbc/2.10.5")
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.20 <4]")
@@ -73,7 +74,7 @@ class PackageConan(ConanFile):
         tc.variables["BUILD_TESTING"] = "OFF"
         tc.variables["BUILD_SHARED_LIBS"] = "ON"
         # CBC is not built for Conan yet
-        tc.variables["BUILD_Cbc"] = "TRUE"
+        tc.variables["USE_COINOR"] = "FALSE"
         if is_msvc(self):
             tc.cache_variables["USE_MSVC_RUNTIME_LIBRARY_DLL"] = not is_msvc_static_runtime(self)
         tc.generate()
