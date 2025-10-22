@@ -1,0 +1,5 @@
+sources:
+  "9.14":
+    url:
+    - "https://github.com/google/or-tools/releases/download/v9.14/or-tools-9.14.tar.gz"
+    sha256: "6af83f7d373084c1221c875a3000f53ecdd1f253336648ef87e0aeef408facd7"
