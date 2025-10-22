@@ -1,11 +1,12 @@
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
-from conan.tools.files import rename, get, apply_conandata_patches, rmdir, mkdir
+from conan.tools.files import get, apply_conandata_patches, rmdir, rm, export_conandata_patches, copy
 from conan.tools.build import cross_building
-from conan.tools.scm import Version
-from contextlib import contextmanager
+from conan.tools.gnu import Autotools, AutotoolsDeps, AutotoolsToolchain, PkgConfigDeps
+from conan.tools.env import Environment, VirtualRunEnv
+from conan.tools.microsoft import is_msvc, unix_path
+from conan.tools.apple import fix_apple_shared_install_name
 import os
-import shutil
 
 required_conan_version = ">=2.0.9"
 
@@ -27,48 +28,35 @@ class CoinCbcConan(ConanFile):
         "fPIC": True,
         "parallel": False,
     }
-    generators = "PkgConfigDeps"
+    implements = ["auto_shared_fpic"]
+    requires = {
+    }
+    build_requires = {
+        "gnu-config/cci.20201022",
+        "pkgconf/1.7.4",
+        "libtool/2.4.7",
+    }
 
     _autotools = None
 
-    @property
-    def _source_subfolder(self):
-        return "source_subfolder"
-
-    @property
-    def _build_subfolder(self):
-        return "build_subfolder"
-
-    def config_options(self):
-        if self.settings.os == "Windows":
-            del self.options.fPIC
+    def export_sources(self):
+        export_conandata_patches(self)
 
     def configure(self):
         if self.options.shared:
-            del self.options.fPIC
+            self.options.rm_safe("fPIC")
 
     def requirements(self):
-        self.requires("coin-utils/2.11.4", force=True, override=True)
-        self.requires("coin-osi/0.108.6", force=True, override=True)
-        self.requires("coin-clp/1.17.6", force=True, override=True)
-        self.requires("coin-cgl/0.60.3")
+        self.requires("coin-utils/2.11.10", force=True)
+        self.requires("coin-osi/0.108.7", force=True)
+        self.requires("coin-clp/1.17.7", force=True)
+        self.requires("coin-cgl/0.60.7", force=True)
         if self.settings.compiler == "msvc" and self.options.parallel:
             self.requires("pthreads4w/3.0.0")
 
-    @property
-    def _settings_build(self):
-        return getattr(self, "settings_build", self.settings)
-
-    @property
-    def _user_info_build(self):
-        return getattr(self, "user_info_build", self.deps_user_info)
-
     def build_requirements(self):
-        self.tool_requires("gnu-config/cci.20201022")
-        self.tool_requires("pkgconf/1.7.4")
-        if self._settings_build.os == "Windows" and not tools.get_env("CONAN_BASH_PATH"):
-            self.tool_requires("msys2/cci.latest")
         if self.settings.compiler == "msvc":
+            self.tool_requires("msys2/cci.latest")
             self.tool_requires("automake/1.16.5")
 
     def validate(self):
@@ -79,89 +67,75 @@ class CoinCbcConan(ConanFile):
             raise ConanInvalidConfiguration("coin-cbc shared not supported yet when cross-building")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-                  strip_root=True, destination=self._source_subfolder)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
+        apply_conandata_patches(self)
 
-    @contextmanager
-    def _build_context(self):
-        if self.settings.compiler == "msvc":
-            with tools.vcvars(self.settings):
-                env = {
-                    "CC": "{} cl -nologo".format(tools.unix_path(self._user_info_build["automake"].compile)),
-                    "CXX": "{} cl -nologo".format(tools.unix_path(self._user_info_build["automake"].compile)),
-                    "LD": "{} link -nologo".format(tools.unix_path(self._user_info_build["automake"].compile)),
-                    "AR": "{} lib".format(tools.unix_path(self._user_info_build["automake"].ar_lib)),
-                }
-                with tools.environment_append(env):
-                    yield
-        else:
-            yield
+    def generate(self):
+        if not cross_building(self):
+            VirtualRunEnv(self).generate(scope="build")
 
-    def _configure_autotools(self):
-        if self._autotools:
-            return self._autotools
-        self._autotools = AutoToolsBuildEnvironment(self, win_bash=tools.os_info.is_windows)
-        self._autotools.libs = []
-        yes_no = lambda v: "yes" if v else "no"
-        configure_args = [
-            "--enable-shared={}".format(yes_no(self.options.shared)),
-            "--enable-cbc-parallel={}".format(yes_no(self.options.parallel)),
-            "--without-blas",
-            "--without-lapack",
-        ]
-        if self.settings.compiler == "msvc":
-            self._autotools.cxx_flags.append("-EHsc")
-            configure_args.append(f"--enable-msvc={self.settings.compiler.runtime}")
-            if Version(self.settings.compiler.version) >= 12:
-                self._autotools.flags.append("-FS")
-            if self.options.parallel:
-                configure_args.append("--with-pthreadsw32-lib={}".format(tools.unix_path(os.path.join(self.deps_cpp_info["pthreads4w"].lib_paths[0], self.deps_cpp_info["pthreads4w"].libs[0] + ".lib"))))
-                configure_args.append("--with-pthreadsw32-incdir={}".format(tools.unix_path(self.deps_cpp_info["pthreads4w"].include_paths[0])))
-        self._autotools.configure(configure_dir=os.path.join(self.source_folder, self._source_subfolder), args=configure_args)
-        return self._autotools
+        tc = AutotoolsToolchain(self)
+        def yes_no(v): return "yes" if v else "no"
+        tc.generate()
+
+        tc = PkgConfigDeps(self)
+        tc.generate()
+
+        deps = AutotoolsDeps(self)
+        deps.generate()
+
+        if is_msvc(self):
+            env = Environment()
+            automake_conf = self.dependencies.build["automake"].conf_info
+            compile_wrapper = unix_path(self, automake_conf.get("user.automake:compile-wrapper", check_type=str))
+            ar_wrapper = unix_path(self, automake_conf.get("user.automake:lib-wrapper", check_type=str))
+            env.define("CC", f"{compile_wrapper} cl -nologo")
+            env.define("CXX", f"{compile_wrapper} cl -nologo")
+            env.define("LD", "link -nologo")
+            env.define("AR", f"{ar_wrapper} lib")
+            env.define("NM", "dumpbin -symbols")
+            env.define("OBJDUMP", ":")
+            env.define("RANLIB", ":")
+            env.define("STRIP", ":")
+            env.vars(self).save_script("conanbuild_msvc")
 
     def build(self):
-        apply_conandata_patches(self)
-        shutil.copy(self._user_info_build["gnu-config"].CONFIG_SUB,
-                    os.path.join(self._source_subfolder, "config.sub"))
-        shutil.copy(self._user_info_build["gnu-config"].CONFIG_GUESS,
-                    os.path.join(self._source_subfolder, "config.guess"))
-        with self._build_context():
-            autotools = self._configure_autotools()
-            autotools.make()
+        autotools = Autotools(self)
+        # absolutely do not call autoreconf, see: https://github.com/coin-or/Cbc/issues/602
+        # completely borked
+        autotools.configure()
+        autotools.make()
 
     def package(self):
-        self.copy("LICENSE", src=self._source_subfolder, dst="licenses")
-        # Installation script expects include/coin to already exist
-        mkdir(self, os.path.join(self.package_folder, "include", "coin"))
-        with self._build_context():
-            autotools = self._configure_autotools()
-            autotools.install()
+        copy(self, "LICENSE", self.source_folder, os.path.join(self.package_folder, "licenses"))
+        autotools = Autotools(self)
+        autotools.install()
 
-        for l in ("CbcSolver", "Cbc", "OsiCbc"):
-            os.unlink(f"{self.package_folder}/lib/lib{l}.la")
-            if self.settings.compiler == "msvc":
-                rename(self,
-                       f"{self.package_folder}/lib/lib{l}.a",
-                       f"{self.package_folder}/lib/{l}.lib")
-
+        rm(self, "*.la", os.path.join(self.package_folder, "lib"))
         rmdir(self, os.path.join(self.package_folder, "lib", "pkgconfig"))
         rmdir(self, os.path.join(self.package_folder, "share"))
 
+        fix_apple_shared_install_name(self)
+
     def package_info(self):
-        self.cpp_info.components["libcbc"].libs = ["CbcSolver", "Cbc"]
-        self.cpp_info.components["libcbc"].includedirs.append(os.path.join("include", "coin"))
-        self.cpp_info.components["libcbc"].requires = ["coin-clp::osi-clp", "coin-utils::coin-utils", "coin-osi::coin-osi", "coin-cgl::coin-cgl"]
-        self.cpp_info.components["libcbc"].names["pkg_config"] = "cbc"
+        cbc = self.cpp_info.components["libcbc"]
+        cbc.libs = ["CbcSolver", "Cbc"]
+        cbc.includedirs = ["include/coin"]
+        cbc.requires = [
+            "coin-clp::osi-clp",
+            "coin-utils::coin-utils",
+            "coin-osi::coin-osi",
+            "coin-cgl::coin-cgl",
+        ]
+        cbc.set_property("pkg_config_name", "cbc")
+
         if self.settings.os in ["Linux", "FreeBSD"] and self.options.parallel:
-            self.cpp_info.components["libcbc"].system_libs.append("pthread")
-        if self.settings.os in ["Windows"] and self.options.parallel:
-            self.cpp_info.components["libcbc"].requires.append("pthreads4w::pthreads4w")
+            cbc.system_libs.append("pthread")
 
-        self.cpp_info.components["osi-cbc"].libs = ["OsiCbc"]
-        self.cpp_info.components["osi-cbc"].requires = ["libcbc"]
-        self.cpp_info.components["osi-cbc"].names["pkg_config"] = "osi-cbc"
+        if self.settings.os == "Windows" and self.options.parallel:
+            cbc.requires.append("pthreads4w::pthreads4w")
 
-        bin_path = os.path.join(self.package_folder, "bin")
-        self.output.info("Appending PATH environment variable: {}".format(bin_path))
-        self.env_info.PATH.append(bin_path)
+        osi_cbc = self.cpp_info.components["osi-cbc"]
+        osi_cbc.libs = ["OsiCbc"]
+        osi_cbc.requires = ["libcbc"]
+        osi_cbc.set_property("pkg_config_name", "osi-cbc")
